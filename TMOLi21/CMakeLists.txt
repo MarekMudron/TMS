@@ -36,12 +36,12 @@ TMOLi21.h
 )
 
 
-add_library( gastal11 SHARED ${TMO_SOURCES} )
-add_custom_command( TARGET gastal11 POST_BUILD 
-	COMMAND cp -f libgastal11.so ../TMOCmd/gastal11.tml
-	COMMAND cp -f libgastal11.so ../TMOgui/gastal11.tml 
-	COMMAND cp -f libgastal11.so ../gastal11.tml 
-#	COMMAND rm -f libgastal11.so 
+add_library( TMOLi21 SHARED ${TMO_SOURCES} )
+add_custom_command( TARGET TMOLi21 POST_BUILD 
+	COMMAND cp -f libTMOLi21.so ../TMOCmd/TMOLi21.tml
+	COMMAND cp -f libTMOLi21.so ../TMOgui/TMOLi21.tml 
+	COMMAND cp -f libTMOLi21.so ../TMOLi21.tml 
+#	COMMAND rm -f libtmoli21.so 
 	)
 
 
