@@ -14,4 +14,6 @@ protected:
     TMOInt beta;
     TMOInt p;
 
+private:
+    cv::Mat transformOneChannel(cv::Mat imageChannel);
 };

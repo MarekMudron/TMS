@@ -82,7 +82,7 @@ TMOLi21::~TMOLi21()
 double CalculateA(cv::Mat patch, double lambda) {
    cv::Scalar meanValue, stdDev;
    cv::meanStdDev(patch, meanValue, stdDev);
-   //fprintf(stderr, "exposure mean %f\n", meanValue[0]);
+   fprintf(stderr, "exposure mean %f, deviation %f\n", meanValue[0], stdDev[0]);
    return (stdDev[0]*stdDev[0])/(stdDev[0]*stdDev[0]+lambda);
 }
 
@@ -98,7 +98,7 @@ double CalculateB(cv::Mat patch, double lambda) {
 cv::Mat MeanIntensityL(cv::Mat patch, double lambda) {
    double a = CalculateA(patch, lambda);
    double b = CalculateB(patch, lambda);
-   return a * patch + b * cv::Mat::ones(patch.size(), patch.type());
+   return a*patch+b*cv::Mat::ones(patch.size(), patch.type());
 }
 
 // OK
@@ -158,11 +158,11 @@ PatchesMatrix CutIntoPatches(const cv::Mat& image, int height, int width, int ke
 
 // OK
 cv::Mat normalizeMat(cv::Mat mat) {
-    cv::Mat normalizedMat;
-    double minVal, maxVal;
-    cv::minMaxLoc(mat, &minVal, &maxVal); // Find minimum and maximum values
-    cv::normalize(mat, normalizedMat, 0, 1, cv::NORM_MINMAX);
-    return normalizedMat;
+   cv::Mat normalizedMat;
+   double minVal, maxVal;
+   cv::minMaxLoc(mat, &minVal, &maxVal); // Find minimum and maximum values
+   cv::normalize(mat, normalizedMat, 0, 1, cv::NORM_MINMAX);
+   return normalizedMat;
 }
 
 // OK
@@ -170,17 +170,17 @@ double CalculateBeta(const cv::Mat& fullIntensity, int beta) {
    int center_i = fullIntensity.rows/2;
    int center_j = fullIntensity.cols/2;
 
-   auto intensity = normalizeMat(fullIntensity);
+   //auto intensity = normalizeMat(fullIntensity);
+   auto intensity = fullIntensity;
    auto centerIntensity = intensity.at<double>(center_i, center_j);
-   // fprintf(stderr, "exposure %f\n", centerIntensity);
    double v;
-   if (centerIntensity>= 0 && centerIntensity <= 0.25) {
+   if (centerIntensity>=0&&centerIntensity<=0.25) {
       v = pow(centerIntensity, beta)*pow(0.25, 1-beta);
    }
-   else if (centerIntensity >= 0.25 && centerIntensity <= 0.5) {
+   else if (centerIntensity>=0.25&&centerIntensity<=0.5) {
       v = 0.5-pow(0.5-centerIntensity, beta)*pow(0.25, 1-beta);
    }
-   else if (centerIntensity >= 0.5 && centerIntensity <= 0.75) {
+   else if (centerIntensity>=0.5&&centerIntensity<=0.75) {
       v = 0.5-pow(centerIntensity-0.5, beta)*pow(0.25, 1-beta);
    }
    else {
@@ -246,14 +246,7 @@ cv::Mat mergeTiles(const std::vector<std::vector<cv::Mat>>& tiles) {
    return mergedImage;
 }
 
-int TMOLi21::Transform()
-{
-   double* pSourceData = pSrc->GetData();
-   double* pDestinationData = pDst->GetData();
-
-   pSrc->Convert(TMO_Yxy);
-   pDst->Convert(TMO_Yxy);
-
+cv::Mat TMOLi21::transformOneChannel(cv::Mat imageChannel) {
    int kernelSizeValue = kernelSize.GetInt();
    double lamb = lambda.GetDouble();
    int betaVal = beta.GetInt();
@@ -261,27 +254,7 @@ int TMOLi21::Transform()
 
    int height = pSrc->GetHeight();
    int width = pSrc->GetWidth();
-
-   cv::Mat Y;
-   cv::Mat x;
-   cv::Mat y;
-
-   Y = cv::Mat::zeros(height, width, CV_64F);
-   x = cv::Mat::zeros(height, width, CV_64F);
-   y = cv::Mat::zeros(height, width, CV_64F);
-
-   int j;
-   for (j = 0; j<height; j++)
-   {
-      for (int i = 0; i<width; i++)
-      {
-         Y.at<double>(j, i) = *pSourceData++;
-         x.at<double>(j, i) = *pSourceData++; /** getting separate RGB channels */
-         y.at<double>(j, i) = *pSourceData++;
-      }
-   }
-
-   PatchesMatrix patches = CutIntoPatches(Y, height, width, kernelSizeValue);
+   PatchesMatrix patches = CutIntoPatches(imageChannel, height, width, kernelSizeValue);
    PatchesMatrix ls;
 
    double bottomSum = 0;
@@ -332,23 +305,63 @@ int TMOLi21::Transform()
          auto l = ls[r][col];
 
          cv::Mat transPatch = gamma*(patch-l)+beta*l;
-
+         fprintf(stderr, "gamma: %f, beta: %f\n", gamma, beta);
          patchesrow.push_back(transPatch);
       }
       transpatches.push_back(patchesrow);
    }
    cv::Mat merged = mergeTiles(transpatches);
+   return merged;
+}
+
+
+int TMOLi21::Transform()
+{
+   double* pSourceData = pSrc->GetData();
+   double* pDestinationData = pDst->GetData();
+
+   int kernelSizeValue = kernelSize.GetInt();
+
+   int height = pSrc->GetHeight();
+   int width = pSrc->GetWidth();
+
+   cv::Mat R;
+   cv::Mat G;
+   cv::Mat B;
+
+   R = cv::Mat::zeros(height, width, CV_64F);
+   G = cv::Mat::zeros(height, width, CV_64F);
+   B = cv::Mat::zeros(height, width, CV_64F);
+
+   int j;
+   for (j = 0; j<height; j++)
+   {
+      for (int i = 0; i<width; i++)
+      {
+         R.at<double>(j, i) = *pSourceData++;
+         G.at<double>(j, i) = *pSourceData++;
+         B.at<double>(j, i) = *pSourceData++;
+         //fprintf(stderr, "%f\n",R.at<double>(j, i ));
+      }
+   }
+
+   cv::Mat Rt;
+   cv::Mat Gt;
+   cv::Mat Bt;
+
+   Rt = transformOneChannel(R);
+   Gt = transformOneChannel(G);
+   Bt = transformOneChannel(B);
+   fprintf(stderr, "------------------------------");
    for (int j = 0; j<height; j++)
    {
       for (int i = 0; i<width; i++)
       {													// simple variables
-         fprintf(stderr, "final %f\n", merged.at<double>(j, i));
-
-         *pDestinationData++ = merged.at<double>(j, i); // + (detailChan[2]).at<float>(j,i)) / 256.0;
-         *pDestinationData++ = x.at<double>(j, i);		// + (detailChan[1]).at<float>(j,i)) / 256.0;
-         *pDestinationData++ = y.at<double>(j, i);
+         fprintf(stderr, "%f\n",Rt.at<double>(j, i));
+         *pDestinationData++ = Rt.at<double>(j, i); // + (detailChan[2]).at<float>(j,i)) / 256.0;
+         *pDestinationData++ = Gt.at<double>(j, i);		// + (detailChan[1]).at<float>(j,i)) / 256.0;
+         *pDestinationData++ = Bt.at<double>(j, i);
       }
    }
-   pDst->Convert(TMO_RGB);
    return 0;
 }
