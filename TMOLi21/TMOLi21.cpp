@@ -78,29 +78,30 @@ TMOLi21::TMOLi21()
 TMOLi21::~TMOLi21()
 {}
 
+// OK
 double CalculateA(cv::Mat patch, double lambda) {
    cv::Scalar meanValue, stdDev;
    cv::meanStdDev(patch, meanValue, stdDev);
-   // fprintf(stderr, "variance %f\n", stdDev[0]);
-   // fprintf(stderr, "lambda %f\n", lambda);
-   // fprintf(stderr, "result %f\n", (stdDev[0]*stdDev[0])/(stdDev[0]*stdDev[0]+lambda));
+   //fprintf(stderr, "exposure mean %f\n", meanValue[0]);
    return (stdDev[0]*stdDev[0])/(stdDev[0]*stdDev[0]+lambda);
 }
+
+// OK
 
 double CalculateB(cv::Mat patch, double lambda) {
    cv::Scalar mean, stdDev;
    cv::meanStdDev(patch, mean, stdDev);
-   //fprintf(stderr, "b %f\n",mean[0]*(lambda/(stdDev[0]*stdDev[0]+lambda))); ;
-
    return mean[0]*lambda/(stdDev[0]*stdDev[0]+lambda);
 }
 
+// OK
 cv::Mat MeanIntensityL(cv::Mat patch, double lambda) {
    double a = CalculateA(patch, lambda);
-   //fprintf(stderr, "a %f\n",a);
-   return a*patch+CalculateB(patch, lambda)*cv::Mat::ones(patch.size(), patch.type());
+   double b = CalculateB(patch, lambda);
+   return a * patch + b * cv::Mat::ones(patch.size(), patch.type());
 }
 
+// OK
 cv::Mat SignalStructureS(cv::Mat patch) {
    cv::Scalar mean, stdDev;
    cv::meanStdDev(patch, mean, stdDev);
@@ -111,6 +112,7 @@ cv::Mat SignalStructureS(cv::Mat patch) {
    return result;
 }
 
+// OK
 double SignalStrengthC(cv::Mat patch, double lambda) {
    cv::Scalar mean, stdDev;
    cv::meanStdDev(patch, mean, stdDev);
@@ -118,7 +120,7 @@ double SignalStrengthC(cv::Mat patch, double lambda) {
    mxMat.setTo(mean[0]);
    return (lambda*cv::norm(patch-mxMat))/(lambda+stdDev[0]*stdDev[0]);
 }
-
+// OK
 double Gamma(cv::Mat patch, cv::Mat l, double lambda, double maxDist, int p, double bottomSum) {
    cv::Scalar meanValue, stdDev;
    cv::meanStdDev(patch, meanValue, stdDev);
@@ -129,6 +131,7 @@ double Gamma(cv::Mat patch, cv::Mat l, double lambda, double maxDist, int p, dou
 
 using PatchesMatrix = vector<vector<cv::Mat>>;
 
+// OK
 PatchesMatrix CutIntoPatches(const cv::Mat& image, int height, int width, int kernelSize) {
    PatchesMatrix tiles;
    // Calculate the number of vertical and horizontal tiles
@@ -153,8 +156,8 @@ PatchesMatrix CutIntoPatches(const cv::Mat& image, int height, int width, int ke
    return tiles;
 }
 
+// OK
 cv::Mat normalizeMat(cv::Mat mat) {
-   // Normalize the matrix to range [0, 1]
     cv::Mat normalizedMat;
     double minVal, maxVal;
     cv::minMaxLoc(mat, &minVal, &maxVal); // Find minimum and maximum values
@@ -162,21 +165,22 @@ cv::Mat normalizeMat(cv::Mat mat) {
     return normalizedMat;
 }
 
+// OK
 double CalculateBeta(const cv::Mat& fullIntensity, int beta) {
    int center_i = fullIntensity.rows/2;
    int center_j = fullIntensity.cols/2;
 
    auto intensity = normalizeMat(fullIntensity);
    auto centerIntensity = intensity.at<double>(center_i, center_j);
-   fprintf(stderr, "exposure %f\n", centerIntensity);
+   // fprintf(stderr, "exposure %f\n", centerIntensity);
    double v;
-   if (centerIntensity>=0&&centerIntensity<=0.25) {
+   if (centerIntensity>= 0 && centerIntensity <= 0.25) {
       v = pow(centerIntensity, beta)*pow(0.25, 1-beta);
    }
-   else if (centerIntensity>=0.25&&centerIntensity<=0.5) {
+   else if (centerIntensity >= 0.25 && centerIntensity <= 0.5) {
       v = 0.5-pow(0.5-centerIntensity, beta)*pow(0.25, 1-beta);
    }
-   else if (centerIntensity>=0.5&&centerIntensity<=0.75) {
+   else if (centerIntensity >= 0.5 && centerIntensity <= 0.75) {
       v = 0.5-pow(centerIntensity-0.5, beta)*pow(0.25, 1-beta);
    }
    else {
@@ -265,17 +269,10 @@ int TMOLi21::Transform()
    Y = cv::Mat::zeros(height, width, CV_64F);
    x = cv::Mat::zeros(height, width, CV_64F);
    y = cv::Mat::zeros(height, width, CV_64F);
-   // double minVal, maxVal;
-   //  cv::minMaxLoc(Y, &minVal, &maxVal);
-   //  // Calculate the range (max - min)
-   //  double range = maxVal - minVal;
-   //  // Normalize the matrix in place
-   //  Y = (Y - minVal) / range;
 
    int j;
    for (j = 0; j<height; j++)
    {
-      pSrc->ProgressBar(j, height); /** You can provide progress bar */
       for (int i = 0; i<width; i++)
       {
          Y.at<double>(j, i) = *pSourceData++;
@@ -296,9 +293,7 @@ int TMOLi21::Transform()
          auto l = MeanIntensityL(patch, lamb);
          auto s = SignalStructureS(patch);
          auto c = SignalStrengthC(patch, lamb);
-         //fprintf(stderr, "%f\n", cv::norm(patch-l));
          distances.push_back(cv::norm(patch-l));
-
          bottomSum += pow(cv::norm(patch-l), pVal);
          lsrow.push_back(l);
       }
@@ -316,10 +311,8 @@ int TMOLi21::Transform()
          auto patch = patches[r][col];
          auto l = ls[r][col];
          auto gamma = Gamma(patch, l, lamb, maxDist, pVal, bottomSum);
-
          auto beta = CalculateBeta(l, betaVal);
          //fprintf(stderr, "%f %f %f\n", beta, gamma, bottomSum);
-
          betasRow.push_back(beta);
          gammasRow.push_back(gamma);
       }
@@ -344,15 +337,13 @@ int TMOLi21::Transform()
       }
       transpatches.push_back(patchesrow);
    }
-
    cv::Mat merged = mergeTiles(transpatches);
-   // fprintf(stderr, "original size %d %d\n", Y.rows, Y.cols);
-
-   // fprintf(stderr, "new image size %d %d\n", merged.rows, merged.cols);
    for (int j = 0; j<height; j++)
    {
       for (int i = 0; i<width; i++)
       {													// simple variables
+         fprintf(stderr, "final %f\n", merged.at<double>(j, i));
+
          *pDestinationData++ = merged.at<double>(j, i); // + (detailChan[2]).at<float>(j,i)) / 256.0;
          *pDestinationData++ = x.at<double>(j, i);		// + (detailChan[1]).at<float>(j,i)) / 256.0;
          *pDestinationData++ = y.at<double>(j, i);
