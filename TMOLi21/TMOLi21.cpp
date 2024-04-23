@@ -153,12 +153,22 @@ PatchesMatrix CutIntoPatches(const cv::Mat& image, int height, int width, int ke
    return tiles;
 }
 
-double CalculateBeta(const cv::Mat& intensity, int beta) {
-   int center_i = intensity.rows/2;
-   int center_j = intensity.cols/2;
+cv::Mat normalizeMat(cv::Mat mat) {
+   // Normalize the matrix to range [0, 1]
+    cv::Mat normalizedMat;
+    double minVal, maxVal;
+    cv::minMaxLoc(mat, &minVal, &maxVal); // Find minimum and maximum values
+    cv::normalize(mat, normalizedMat, 0, 1, cv::NORM_MINMAX);
+    return normalizedMat;
+}
 
+double CalculateBeta(const cv::Mat& fullIntensity, int beta) {
+   int center_i = fullIntensity.rows/2;
+   int center_j = fullIntensity.cols/2;
+
+   auto intensity = normalizeMat(fullIntensity);
    auto centerIntensity = intensity.at<double>(center_i, center_j);
-   fprintf(stderr, "exposure %f", centerIntensity);
+   fprintf(stderr, "exposure %f\n", centerIntensity);
    double v;
    if (centerIntensity>=0&&centerIntensity<=0.25) {
       v = pow(centerIntensity, beta)*pow(0.25, 1-beta);
@@ -194,6 +204,8 @@ void normalize(std::vector<std::vector<double>>& vec) {
       }
    }
 }
+
+
 
 cv::Mat mergeTiles(const std::vector<std::vector<cv::Mat>>& tiles) {
    if (tiles.empty()||tiles[0].empty()) return cv::Mat();
@@ -253,6 +265,12 @@ int TMOLi21::Transform()
    Y = cv::Mat::zeros(height, width, CV_64F);
    x = cv::Mat::zeros(height, width, CV_64F);
    y = cv::Mat::zeros(height, width, CV_64F);
+   // double minVal, maxVal;
+   //  cv::minMaxLoc(Y, &minVal, &maxVal);
+   //  // Calculate the range (max - min)
+   //  double range = maxVal - minVal;
+   //  // Normalize the matrix in place
+   //  Y = (Y - minVal) / range;
 
    int j;
    for (j = 0; j<height; j++)
@@ -280,7 +298,7 @@ int TMOLi21::Transform()
          auto c = SignalStrengthC(patch, lamb);
          //fprintf(stderr, "%f\n", cv::norm(patch-l));
          distances.push_back(cv::norm(patch-l));
-         
+
          bottomSum += pow(cv::norm(patch-l), pVal);
          lsrow.push_back(l);
       }
