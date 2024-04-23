@@ -48,8 +48,8 @@ TMOLi21::TMOLi21()
 
    kernelSize.SetName(L"kernelsize");
    kernelSize.SetDescription(L"Kernel size X*X: X=");
-   kernelSize.SetDefault(3);
-   kernelSize = 3;
+   kernelSize.SetDefault(10);
+   kernelSize = 10;
    this->Register(kernelSize);
    kernelSize.SetRange(3, 20);
 
@@ -78,92 +78,87 @@ TMOLi21::TMOLi21()
 TMOLi21::~TMOLi21()
 {}
 
-void fillRGB(cv::Mat& matrix, double* pSourceData, int height, int width) {
-   for (int rowI = 0; rowI<height; rowI++)
-   {
-      for (int colI = 0; colI<width; colI++)
-      {
-         /** need to store rgb in mat to calculate colour ratio later */
-         matrix.at<cv::Vec3d>(rowI, colI)[0] = *pSourceData++;
-         matrix.at<cv::Vec3d>(rowI, colI)[1] = *pSourceData++;
-         matrix.at<cv::Vec3d>(rowI, colI)[2] = *pSourceData++;
-      }
-   }
-}
-
-using PatchesMatrix = vector<vector<cv::Mat>>;
-using CoefsMatrix = vector<vector<cv::Scalar>>;
-
-PatchesMatrix CutIntoPatches(const cv::Mat& matrix, int height, int width, int kernelSize) {
-   PatchesMatrix patches;
-   for (int r = 0; r<height; r += kernelSize) {
-      std::vector<cv::Mat> patchesrow;
-
-      for (int col = 0; col<width; col += kernelSize) {
-         cv::Rect roi(col, r, kernelSize, kernelSize);
-         roi.width = std::min(roi.width, width-col);
-         roi.height = std::min(roi.height, height-r);
-         cv::Mat patch = matrix(roi);
-         patchesrow.push_back(patch);
-      }
-      patches.push_back(patchesrow);
-   }
-   return patches;
-}
-
-cv::Scalar CalculateA(cv::Mat patch, double lambda) {
+double CalculateA(cv::Mat patch, double lambda) {
    cv::Scalar meanValue, stdDev;
    cv::meanStdDev(patch, meanValue, stdDev);
-   return (stdDev*stdDev)/(stdDev*stdDev+cv::Scalar(lambda, lambda, lambda));
+   // fprintf(stderr, "variance %f\n", stdDev[0]);
+   // fprintf(stderr, "lambda %f\n", lambda);
+   // fprintf(stderr, "result %f\n", (stdDev[0]*stdDev[0])/(stdDev[0]*stdDev[0]+lambda));
+   return (stdDev[0]*stdDev[0])/(stdDev[0]*stdDev[0]+lambda);
 }
 
-cv::Scalar CalculateB(cv::Mat patch, double lambda) {
+double CalculateB(cv::Mat patch, double lambda) {
    cv::Scalar mean, stdDev;
    cv::meanStdDev(patch, mean, stdDev);
-   cv::Scalar lambScalar = cv::Scalar(lambda, lambda, lambda);
-   return mean*lambScalar/(stdDev*stdDev+lambScalar);
+   //fprintf(stderr, "b %f\n",mean[0]*(lambda/(stdDev[0]*stdDev[0]+lambda))); ;
+
+   return mean[0]*lambda/(stdDev[0]*stdDev[0]+lambda);
 }
 
 cv::Mat MeanIntensityL(cv::Mat patch, double lambda) {
-   auto a = CalculateA(patch, lambda);
-   //TODO fix
-   return CalculateA(patch, lambda)*patch+CalculateB(patch, lambda)*cv::Mat::ones(patch.size(), patch.type());
-}
-
-cv::Scalar SignalStrengthC(cv::Mat patch, double lambda) {
-   cv::Scalar mean, stdDev;
-   cv::meanStdDev(patch, mean, stdDev);
-   cv::Scalar lambScalar = cv::Scalar(lambda, lambda, lambda);
-   cv::Mat mxMat(patch.size(), patch.type());
-   mxMat.setTo(mean);
-   return (lambScalar*cv::norm(patch-mxMat))/(lambScalar+stdDev*stdDev);
+   double a = CalculateA(patch, lambda);
+   //fprintf(stderr, "a %f\n",a);
+   return a*patch+CalculateB(patch, lambda)*cv::Mat::ones(patch.size(), patch.type());
 }
 
 cv::Mat SignalStructureS(cv::Mat patch) {
    cv::Scalar mean, stdDev;
    cv::meanStdDev(patch, mean, stdDev);
    cv::Mat mxMat(patch.size(), patch.type());
-   mxMat.setTo(mean);
+   mxMat.setTo(mean[0]);
    cv::Mat result;
    cv::divide(patch-mxMat, cv::norm(patch-mxMat), result);
    return result;
 }
 
-cv::Scalar Gamma(cv::Mat patch, cv::Mat l, double lambda, double maxDist, int p, double bottomSum) {
-   cv::Scalar lambScalar = cv::Scalar(lambda, lambda, lambda);
-   cv::Scalar maxDistScalar = cv::Scalar(maxDist, maxDist, maxDist);
+double SignalStrengthC(cv::Mat patch, double lambda) {
+   cv::Scalar mean, stdDev;
+   cv::meanStdDev(patch, mean, stdDev);
+   cv::Mat mxMat(patch.size(), patch.type());
+   mxMat.setTo(mean[0]);
+   return (lambda*cv::norm(patch-mxMat))/(lambda+stdDev[0]*stdDev[0]);
+}
+
+double Gamma(cv::Mat patch, cv::Mat l, double lambda, double maxDist, int p, double bottomSum) {
    cv::Scalar meanValue, stdDev;
    cv::meanStdDev(patch, meanValue, stdDev);
-   auto first = (lambScalar*maxDistScalar)/(stdDev*stdDev+lambScalar);
+   auto first = (lambda*maxDist)/(stdDev[0]*stdDev[0]+lambda);
    auto second = pow(cv::norm(patch-l), p-1)/bottomSum;
    return first*second;
 }
 
-cv::Scalar CalculateBeta(const cv::Mat& intensity, int beta) {
+using PatchesMatrix = vector<vector<cv::Mat>>;
+
+PatchesMatrix CutIntoPatches(const cv::Mat& image, int height, int width, int kernelSize) {
+   PatchesMatrix tiles;
+   // Calculate the number of vertical and horizontal tiles
+   int numVerticalTiles = (height+kernelSize-1)/kernelSize;
+   int numHorizontalTiles = (width+kernelSize-1)/kernelSize;
+
+   for (int i = 0; i<numVerticalTiles; ++i) {
+      std::vector<cv::Mat> rowTiles;
+      for (int j = 0; j<numHorizontalTiles; ++j) {
+         int startY = i*kernelSize;
+         int startX = j*kernelSize;
+         int tileHeight = std::min(kernelSize, height-startY);
+         int tileWidth = std::min(kernelSize, width-startX);
+
+         // Extract the tile using cv::Rect and push it into the row vector
+         cv::Rect roi(startX, startY, tileWidth, tileHeight);
+         rowTiles.push_back(image(roi));
+      }
+      // Add the row of tiles to the tiles vector
+      tiles.push_back(rowTiles);
+   }
+   return tiles;
+}
+
+double CalculateBeta(const cv::Mat& intensity, int beta) {
    int center_i = intensity.rows/2;
    int center_j = intensity.cols/2;
 
-   auto centerIntensity = intensity.at<cv::Vec3d>(center_i, center_j)[0];
+   auto centerIntensity = intensity.at<double>(center_i, center_j);
+   fprintf(stderr, "exposure %f", centerIntensity);
    double v;
    if (centerIntensity>=0&&centerIntensity<=0.25) {
       v = pow(centerIntensity, beta)*pow(0.25, 1-beta);
@@ -177,77 +172,62 @@ cv::Scalar CalculateBeta(const cv::Mat& intensity, int beta) {
    else {
       v = pow(1-centerIntensity, beta)*pow(0.25, 1-beta);
    }
-   return cv::Scalar(v, v, v);
+   return v;
 }
 
-void normalize(std::vector<std::vector<cv::Scalar>>& betas) {
-   int numChannels = betas[0][0].channels;
+void normalize(std::vector<std::vector<double>>& vec) {
+   double sum = 0.0;
 
-   // Initialize a Scalar to hold sums for each channel
-   cv::Scalar channelSums(0, 0, 0, 0);
-
-   // Calculate the sum of each channel across all Scalars
-   for (const auto& vecScalars:betas) {
-      for (const auto& scalar:vecScalars) {
-         for (int i = 0; i<numChannels; ++i) {
-            channelSums[i] += scalar[i];
-         }
+   // Calculate the sum of all elements
+   for (const auto& row:vec) {
+      for (double val : row) {
+         sum += val;
       }
    }
+   // Check for zero sum to avoid division by zero
+   if (sum==0) return;
 
-   // Normalize each Scalar by the sum of its corresponding channel
-   for (auto& vecScalars:betas) {
-      for (auto& scalar:vecScalars) {
-         for (int i = 0; i<numChannels; ++i) {
-            if (channelSums[i]!=0) {  // Avoid division by zero
-               scalar[i] /= channelSums[i];
-            }
-         }
+   // Normalize each element
+   for (auto& row:vec) {
+      for (double& val:row) {
+         val /= sum;
       }
    }
 }
 
-cv::Mat mergeTiles(const std::vector<std::vector<cv::Mat>>& imageTiles) {
-   // Determine the total size of the merged image
-   int totalHeight = 0;
-   int totalWidth = 0;
-   int type = imageTiles[0][0].type();
+cv::Mat mergeTiles(const std::vector<std::vector<cv::Mat>>& tiles) {
+   if (tiles.empty()||tiles[0].empty()) return cv::Mat();
 
-   // Calculate the total width and maximum row height
-   std::vector<int> rowHeights(imageTiles.size(), 0);
-   std::vector<int> colWidths(imageTiles[0].size(), 0);
+   int totalRows = 0;
+   int totalCols = 0;
+   int numRows = tiles.size();
+   int numCols = tiles[0].size();
 
-   for (int i = 0; i<imageTiles.size(); ++i) {
-      int currentRowWidth = 0;
-      for (int j = 0; j<imageTiles[i].size(); ++j) {
-         currentRowWidth += imageTiles[i][j].cols;
-         rowHeights[i] = std::max(rowHeights[i], imageTiles[i][j].rows);
+   // Calculate the total number of rows and columns in the merged image
+   for (int i = 0; i<numRows; ++i) {
+      totalRows += tiles[i][0].rows;
+   }
+   for (int j = 0; j<numCols; ++j) {
+      totalCols += tiles[0][j].cols;
+   }
+
+   // Create a large matrix to store the merged image
+   cv::Mat mergedImage(totalRows, totalCols, tiles[0][0].type());
+   int startY = 0;
+
+   // Copy each tile into the correct location in the large matrix
+   for (int i = 0; i<numRows; ++i) {
+      int startX = 0;
+      int currentRowHeight = tiles[i][0].rows;
+
+      for (int j = 0; j<numCols; ++j) {
+         tiles[i][j].copyTo(mergedImage(cv::Rect(startX, startY, tiles[i][j].cols, currentRowHeight)));
+         startX += tiles[i][j].cols;
       }
-      totalWidth = std::max(totalWidth, currentRowWidth);
+      startY += currentRowHeight;
    }
 
-   // Calculate the total height
-   for (int height : rowHeights) {
-      totalHeight += height;
-   }
-
-   // Create a large image to hold all the tiles
-   cv::Mat bigImage(totalHeight, totalWidth, type);
-
-   // Copy each tile into the corresponding position in the big image
-   int yOffset = 0;
-   for (int i = 0; i<imageTiles.size(); ++i) {
-      int xOffset = 0;
-      for (int j = 0; j<imageTiles[i].size(); ++j) {
-         cv::Rect roi(xOffset, yOffset, imageTiles[i][j].cols, imageTiles[i][j].rows);
-         cv::Mat destinationROI = bigImage(roi);
-         imageTiles[i][j].copyTo(destinationROI);
-         xOffset += imageTiles[i][j].cols;
-      }
-      yOffset += rowHeights[i];
-   }
-
-   return bigImage;
+   return mergedImage;
 }
 
 int TMOLi21::Transform()
@@ -255,35 +235,52 @@ int TMOLi21::Transform()
    double* pSourceData = pSrc->GetData();
    double* pDestinationData = pDst->GetData();
 
-   // using raw pixel values
-   pSrc->Convert(TMO_RGB);
-   pDst->Convert(TMO_RGB);
+   pSrc->Convert(TMO_Yxy);
+   pDst->Convert(TMO_Yxy);
 
    int kernelSizeValue = kernelSize.GetInt();
-   int lamb = lambda.GetDouble();
+   double lamb = lambda.GetDouble();
    int betaVal = beta.GetInt();
    int pVal = p.GetInt();
-   cv::Scalar lambScalar = cv::Scalar(lambda, lambda, lambda);
 
    int height = pSrc->GetHeight();
    int width = pSrc->GetWidth();
 
-   cv::Mat I_RGB(height, width, CV_64FC3);
-   fillRGB(I_RGB, pSourceData, height, width);
+   cv::Mat Y;
+   cv::Mat x;
+   cv::Mat y;
 
-   PatchesMatrix patches = CutIntoPatches(I_RGB, height, width, kernelSize.GetInt());
+   Y = cv::Mat::zeros(height, width, CV_64F);
+   x = cv::Mat::zeros(height, width, CV_64F);
+   y = cv::Mat::zeros(height, width, CV_64F);
+
+   int j;
+   for (j = 0; j<height; j++)
+   {
+      pSrc->ProgressBar(j, height); /** You can provide progress bar */
+      for (int i = 0; i<width; i++)
+      {
+         Y.at<double>(j, i) = *pSourceData++;
+         x.at<double>(j, i) = *pSourceData++; /** getting separate RGB channels */
+         y.at<double>(j, i) = *pSourceData++;
+      }
+   }
+
+   PatchesMatrix patches = CutIntoPatches(Y, height, width, kernelSizeValue);
    PatchesMatrix ls;
-   vector<double> distances;
 
    double bottomSum = 0;
+   vector<double> distances;
+
    for (auto patchRow:patches) {
       std::vector<cv::Mat> lsrow;
       for (auto patch:patchRow) {
          auto l = MeanIntensityL(patch, lamb);
-         
-         auto c = SignalStructureS(patch);
          auto s = SignalStructureS(patch);
+         auto c = SignalStrengthC(patch, lamb);
+         //fprintf(stderr, "%f\n", cv::norm(patch-l));
          distances.push_back(cv::norm(patch-l));
+         
          bottomSum += pow(cv::norm(patch-l), pVal);
          lsrow.push_back(l);
       }
@@ -291,52 +288,58 @@ int TMOLi21::Transform()
    }
 
    double maxDist = *std::max_element(distances.begin(), distances.end());
-   std::vector<std::vector<cv::Scalar>> gammas;
-   std::vector<std::vector<cv::Scalar>> betas;
+   std::vector<std::vector<double>> gammas;
+   std::vector<std::vector<double>> betas;
+
    for (int r = 0; r<ls.size(); r++) {
-      std::vector<cv::Mat> patchesrow;
-      std::vector<cv::Scalar> betasRow;
-      std::vector<cv::Scalar> gammasRow;
+      std::vector<double> betasRow;
+      std::vector<double> gammasRow;
       for (int col = 0; col<ls[0].size(); col++) {
          auto patch = patches[r][col];
          auto l = ls[r][col];
          auto gamma = Gamma(patch, l, lamb, maxDist, pVal, bottomSum);
+
          auto beta = CalculateBeta(l, betaVal);
+         //fprintf(stderr, "%f %f %f\n", beta, gamma, bottomSum);
+
          betasRow.push_back(beta);
          gammasRow.push_back(gamma);
       }
       gammas.push_back(gammasRow);
       betas.push_back(betasRow);
    }
+
    normalize(betas);
 
-   std::vector<std::vector<cv::Mat>> transpatches;
+   PatchesMatrix transpatches;
    for (int r = 0; r<gammas.size(); r++) {
       std::vector<cv::Mat> patchesrow;
       for (int col = 0; col<gammas[0].size(); col++) {
-
          auto patch = patches[r][col];
          auto gamma = gammas[r][col];
          auto beta = betas[r][col];
          auto l = ls[r][col];
+
          cv::Mat transPatch = gamma*(patch-l)+beta*l;
 
          patchesrow.push_back(transPatch);
       }
       transpatches.push_back(patchesrow);
    }
-   
-   cv::Mat merged = mergeTiles(transpatches);
 
-   for (int j = 0; j<pSrc->GetHeight(); j++)
+   cv::Mat merged = mergeTiles(transpatches);
+   // fprintf(stderr, "original size %d %d\n", Y.rows, Y.cols);
+
+   // fprintf(stderr, "new image size %d %d\n", merged.rows, merged.cols);
+   for (int j = 0; j<height; j++)
    {
-      for (int i = 0; i<pSrc->GetWidth(); i++)
-      {
-         /** store results to the destination image */
-         *pDestinationData++ = merged.at<cv::Vec3f>(j, i)[0];
-         *pDestinationData++ = merged.at<cv::Vec3f>(j, i)[1];
-         *pDestinationData++ = merged.at<cv::Vec3f>(j, i)[2];
+      for (int i = 0; i<width; i++)
+      {													// simple variables
+         *pDestinationData++ = merged.at<double>(j, i); // + (detailChan[2]).at<float>(j,i)) / 256.0;
+         *pDestinationData++ = x.at<double>(j, i);		// + (detailChan[1]).at<float>(j,i)) / 256.0;
+         *pDestinationData++ = y.at<double>(j, i);
       }
    }
+   pDst->Convert(TMO_RGB);
    return 0;
 }
