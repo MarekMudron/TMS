@@ -98,7 +98,7 @@ double CalculateB(cv::Mat patch, double lambda) {
 cv::Mat MeanIntensityL(cv::Mat patch, double lambda) {
    double a = CalculateA(patch, lambda);
    double b = CalculateB(patch, lambda);
-   return a * patch + b * cv::Mat::ones(patch.size(), patch.type());
+   return a*patch+b*cv::Mat::ones(patch.size(), patch.type());
 }
 
 // OK
@@ -158,11 +158,11 @@ PatchesMatrix CutIntoPatches(const cv::Mat& image, int height, int width, int ke
 
 // OK
 cv::Mat normalizeMat(cv::Mat mat) {
-    cv::Mat normalizedMat;
-    double minVal, maxVal;
-    cv::minMaxLoc(mat, &minVal, &maxVal); // Find minimum and maximum values
-    cv::normalize(mat, normalizedMat, 0, 1, cv::NORM_MINMAX);
-    return normalizedMat;
+   cv::Mat normalizedMat;
+   double minVal, maxVal;
+   cv::minMaxLoc(mat, &minVal, &maxVal); // Find minimum and maximum values
+   cv::normalize(mat, normalizedMat, 0, 1, cv::NORM_MINMAX);
+   return normalizedMat;
 }
 
 // OK
@@ -170,17 +170,18 @@ double CalculateBeta(const cv::Mat& fullIntensity, int beta) {
    int center_i = fullIntensity.rows/2;
    int center_j = fullIntensity.cols/2;
 
-   auto intensity = normalizeMat(fullIntensity);
+   //auto intensity = normalizeMat(fullIntensity);
+   auto intensity = fullIntensity;
    auto centerIntensity = intensity.at<double>(center_i, center_j);
    // fprintf(stderr, "exposure %f\n", centerIntensity);
    double v;
-   if (centerIntensity>= 0 && centerIntensity <= 0.25) {
+   if (centerIntensity>=0&&centerIntensity<=0.25) {
       v = pow(centerIntensity, beta)*pow(0.25, 1-beta);
    }
-   else if (centerIntensity >= 0.25 && centerIntensity <= 0.5) {
+   else if (centerIntensity>=0.25&&centerIntensity<=0.5) {
       v = 0.5-pow(0.5-centerIntensity, beta)*pow(0.25, 1-beta);
    }
-   else if (centerIntensity >= 0.5 && centerIntensity <= 0.75) {
+   else if (centerIntensity>=0.5&&centerIntensity<=0.75) {
       v = 0.5-pow(centerIntensity-0.5, beta)*pow(0.25, 1-beta);
    }
    else {
@@ -246,6 +247,65 @@ cv::Mat mergeTiles(const std::vector<std::vector<cv::Mat>>& tiles) {
    return mergedImage;
 }
 
+std::vector<cv::Mat> convertHDRtoLDR(const cv::Mat& hdrImage, int K) {
+   double minExposure = 0.125;  // This might simulate an underexposure
+   double maxExposure = 8.0;    // This might simulate an overexposure
+   double exposureRange = maxExposure/minExposure;
+
+   // Compute the exposure increment factor logarithmically
+   double exposureIncrement = std::pow(exposureRange, 1.0/(K-1));
+
+   double currentExposure = minExposure;
+   std::vector<cv::Mat> exposureImages;
+   for (int i = 0; i<K; ++i) {
+      cv::Mat exposedImage;
+      // Apply the exposure adjustment
+      hdrImage.convertTo(exposedImage, CV_64F, currentExposure);
+      exposureImages.push_back(exposedImage);
+      currentExposure *= exposureIncrement;
+   }
+   return exposureImages;
+}
+
+std::vector<std::vector<std::vector<cv::Mat>>> transposePatches(const std::vector<PatchesMatrix>& images) {
+   if (images.empty()) return {};
+
+   // Determine the size of the grid of patches from the first image
+   int numRows = images[0].size();
+   int numCols = images[0].empty() ? 0 : images[0][0].size();
+
+   // Prepare the output structure with the required dimensions
+   std::vector<std::vector<std::vector<cv::Mat>>> transposed(numRows, std::vector<std::vector<cv::Mat>>(numCols));
+
+   // Populate the transposed structure
+   for (const auto& image:images) { // Loop over each image
+      for (int i = 0; i<numRows; ++i) { // Loop over each row of patches
+         for (int j = 0; j<numCols; ++j) { // Loop over each column of patches
+            transposed[i][j].push_back(image[i][j]); // Add the patch at (i, j) to the list of patches at the same position across all images
+         }
+      }
+   }
+
+   return transposed;
+}
+
+std::vector<double> normalizeVector(const std::vector<double>& input) {
+   std::vector<double> normalized;
+   if (input.empty()) return normalized;  // Return empty vector if input is empty
+
+   double sum = std::accumulate(input.begin(), input.end(), 0.0);  // Calculate the sum of all elements
+   if (sum==0) return normalized;  // If sum is 0, return empty vector to avoid division by zero
+
+   normalized.reserve(input.size());  // Reserve memory to avoid reallocation
+
+   // Divide each element by the sum and store in the normalized vector
+   for (double num : input) {
+      normalized.push_back(num/sum);
+   }
+
+   return normalized;
+}
+
 int TMOLi21::Transform()
 {
    double* pSourceData = pSrc->GetData();
@@ -270,6 +330,8 @@ int TMOLi21::Transform()
    x = cv::Mat::zeros(height, width, CV_64F);
    y = cv::Mat::zeros(height, width, CV_64F);
 
+   int K = 3;
+
    int j;
    for (j = 0; j<height; j++)
    {
@@ -280,69 +342,68 @@ int TMOLi21::Transform()
          y.at<double>(j, i) = *pSourceData++;
       }
    }
+   auto ldrs = convertHDRtoLDR(Y, K);
+   vector<PatchesMatrix> patchesMatrices;
+   for (const auto& mat:ldrs) {
+      PatchesMatrix patches = CutIntoPatches(mat, height, width, kernelSizeValue);
+      patchesMatrices.push_back(patches);
+   }
+   vector<vector<vector<cv::Mat>>> transposedPatches = transposePatches(patchesMatrices);
 
-   PatchesMatrix patches = CutIntoPatches(Y, height, width, kernelSizeValue);
-   PatchesMatrix ls;
-
-   double bottomSum = 0;
-   vector<double> distances;
-
-   for (auto patchRow:patches) {
+   PatchesMatrix transPatches;
+   for (auto patchRow:transposedPatches) {
       std::vector<cv::Mat> lsrow;
-      for (auto patch:patchRow) {
-         auto l = MeanIntensityL(patch, lamb);
-         auto s = SignalStructureS(patch);
-         auto c = SignalStrengthC(patch, lamb);
-         distances.push_back(cv::norm(patch-l));
-         bottomSum += pow(cv::norm(patch-l), pVal);
-         lsrow.push_back(l);
+      std::vector<cv::Mat> transPatchesRow;
+      for (auto patchesK:patchRow) {
+         vector<double> distances;
+         vector<double> cs;
+         vector<cv::Mat> ss;
+         vector<cv::Mat> ls;
+         double bottomSum = 0;
+
+         for (auto patch:patchesK) {
+            auto l = MeanIntensityL(patch, lamb);
+            auto s = SignalStructureS(patch);
+            auto c = SignalStrengthC(patch, lamb);
+            distances.push_back(cv::norm(patch-l));
+            bottomSum += pow(cv::norm(patch-l), pVal);
+            ls.push_back(l);
+            cs.push_back(c);
+            ss.push_back(s);
+         }
+         double maxDist = *std::max_element(distances.begin(), distances.end());
+         std::vector<double> gammas;
+         std::vector<double> betas;
+
+         for (int kI = 0; kI<patchesK.size();kI++) {
+            auto patch = patchesK[kI];
+            auto l = ls[kI];
+            auto gamma = Gamma(patch, l, lamb, maxDist, pVal, bottomSum);
+            auto beta = CalculateBeta(l, betaVal);
+            gammas.push_back(gamma);
+            betas.push_back(beta);
+         }
+         betas = normalizeVector(betas);
+
+         cv::Mat transPatch = cv::Mat::zeros(kernelSizeValue, kernelSizeValue, CV_64F);
+         for (int kI = 0; kI<patchesK.size();kI++) {
+            auto patch = patchesK[kI];
+            auto gamma = gammas[kI];
+            auto beta = betas[kI];
+            auto l = ls[kI];
+            transPatch += gamma*(patch-l)+beta*l;
+         }
+         transPatchesRow.push_back(transPatch);
       }
-      ls.push_back(lsrow);
+      transPatches.push_back(transPatchesRow);
    }
 
-   double maxDist = *std::max_element(distances.begin(), distances.end());
-   std::vector<std::vector<double>> gammas;
-   std::vector<std::vector<double>> betas;
-
-   for (int r = 0; r<ls.size(); r++) {
-      std::vector<double> betasRow;
-      std::vector<double> gammasRow;
-      for (int col = 0; col<ls[0].size(); col++) {
-         auto patch = patches[r][col];
-         auto l = ls[r][col];
-         auto gamma = Gamma(patch, l, lamb, maxDist, pVal, bottomSum);
-         auto beta = CalculateBeta(l, betaVal);
-         //fprintf(stderr, "%f %f %f\n", beta, gamma, bottomSum);
-         betasRow.push_back(beta);
-         gammasRow.push_back(gamma);
-      }
-      gammas.push_back(gammasRow);
-      betas.push_back(betasRow);
-   }
-
-   normalize(betas);
-
-   PatchesMatrix transpatches;
-   for (int r = 0; r<gammas.size(); r++) {
-      std::vector<cv::Mat> patchesrow;
-      for (int col = 0; col<gammas[0].size(); col++) {
-         auto patch = patches[r][col];
-         auto gamma = gammas[r][col];
-         auto beta = betas[r][col];
-         auto l = ls[r][col];
-
-         cv::Mat transPatch = gamma*(patch-l)+beta*l;
-
-         patchesrow.push_back(transPatch);
-      }
-      transpatches.push_back(patchesrow);
-   }
-   cv::Mat merged = mergeTiles(transpatches);
+   cv::Mat merged = mergeTiles(transPatches);
    for (int j = 0; j<height; j++)
    {
       for (int i = 0; i<width; i++)
       {													// simple variables
-         fprintf(stderr, "final %f\n", merged.at<double>(j, i));
+         //fprintf(stderr, "final %f\n", merged.at<double>(j, i));
 
          *pDestinationData++ = merged.at<double>(j, i); // + (detailChan[2]).at<float>(j,i)) / 256.0;
          *pDestinationData++ = x.at<double>(j, i);		// + (detailChan[1]).at<float>(j,i)) / 256.0;
